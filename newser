@@ -1,0 +1,477 @@
+#!/usr/local/bin/perl
+#
+# newser -- a News and Mail query browser. Joe Morris jolomo@netcom.com
+#
+# $Id: newser,v 1.16 1993/12/02 20:20:10 joe Exp $
+#
+# SYNTAX
+sub Usage {
+    print "Usage: $0 [-f from_string] [-s subject_string] [search_string]\n";
+    print "       Wrap double quotes around regex strings\n";
+    exit(1);
+}
+#
+# DESCRIPTION
+#    The raw materials for this program are files where you've appended all
+#    your online goodies. All those articles that you thought were worth
+#    saving but now are taking 100MB of disk space and all you can do
+#    is grep around in them. BLAH :(
+#       NEWSER treats each of these files as a series of discreet messages,
+#    you will be much better off if you just appended these things one after
+#    the other, never editing the area which really defines a message ---
+#    The Header. (Formal description of a "message" is in Notes section).
+#    The USENET digests I've tried have worked fine.
+#       With NEWSER, you can search on specific subjects, authors (From lines),
+#    and things within the body of the message. A search for the word "From"
+#    in the body will not match the "From"'s in headers, searches for
+#    a specific subject will only match Subject lines in the header.
+#       This program was prompted by a recent discussion on
+#    alt.folklore.computers where it seemed that this sort of thing is
+#    not readily available today -- so here's my 300 lines worth.
+#
+#    This is alpha, it's been run successfully on Linux(4MB ram :), SUN and AIX.
+#
+# ENVIRONMENT
+#    NDIRS (news-dirs) a PATH-like variable to searched for your accumulated
+#       articles and e-mail. Defaults to "$HOME/News:$HOME/Mail".
+#    PAGER if unset or empty, defaults to "less".
+ubik:mac jolomo$ cat ~/src/newser/newser-1.6/newser.pl
+#!/usr/local/bin/perl
+#
+# newser -- a News and Mail query browser. Joe Morris jolomo@netcom.com
+#
+# $Id: newser,v 1.16 1993/12/02 20:20:10 joe Exp $
+#
+# SYNTAX
+sub Usage {
+    print "Usage: $0 [-f from_string] [-s subject_string] [search_string]\n";
+    print "       Wrap double quotes around regex strings\n";
+    exit(1);
+}
+#
+# DESCRIPTION
+#    The raw materials for this program are files where you've appended all
+#    your online goodies. All those articles that you thought were worth
+#    saving but now are taking 100MB of disk space and all you can do
+#    is grep around in them. BLAH :(
+#       NEWSER treats each of these files as a series of discreet messages,
+#    you will be much better off if you just appended these things one after
+#    the other, never editing the area which really defines a message ---
+#    The Header. (Formal description of a "message" is in Notes section).
+#    The USENET digests I've tried have worked fine.
+#       With NEWSER, you can search on specific subjects, authors (From lines),
+#    and things within the body of the message. A search for the word "From"
+#    in the body will not match the "From"'s in headers, searches for
+#    a specific subject will only match Subject lines in the header.
+#       This program was prompted by a recent discussion on
+#    alt.folklore.computers where it seemed that this sort of thing is
+#    not readily available today -- so here's my 300 lines worth.
+#
+#    This is alpha, it's been run successfully on Linux(4MB ram :), SUN and AIX.
+#
+# ENVIRONMENT
+#    NDIRS (news-dirs) a PATH-like variable to searched for your accumulated
+#       articles and e-mail. Defaults to "$HOME/News:$HOME/Mail".
+#    PAGER if unset or empty, defaults to "less".
+#
+# NOTES, Questions and Bugs
+# 0. It runs about as quickly as you would expect. Perl experts please mail
+#    me useful optimizations -- especially in got_a_match().
+# 1. Probably am overusing global variables
+# 2. Does anyone have a regex to handle most every "Date:" format that
+#    shows up in News and Mail -- To do date ranges. I haven't really needed
+#    this feature, is it useful?
+# 3. What's the best way to implement ignore case matches -- with evals or
+#    more conditional statements or something else? I work around this now
+#    with regex's like:  $ newser -s "[Hh][Ee][Ll][Pp]"
+# 4. Right now all search criteria are ANDed together.
+# 5. Quitting the PAGER before search is done will abort the program.
+# 6. How can I position the PAGER at the most recently viewed message?
+# 7. If you don't already use "less", this would be a good time to learn it.
+# 8. What is a News (or Mail) message:
+#    a. Top of file or blank line
+#    b. header -- at least three lines (can't have a blank line in between)
+#       must be matched by patterns in handle_head_line().
+#       You can have any number of these in the header
+#       and any order is ok
+#    c. A blank line
+#    d. body of message -- optional
+#       any number of lines with one possible fatal error:
+#       a blank line followed by 3 lines matched by handle_head_line().
+#       Any blank line before the magic "3" will recover from error.
+# 9. Please mail me any rewrites or additions -- jolomo@netcom.com
+#
+
+require "getopts.pl";
+require "assert.ph";
+require "flush.pl";
+
+#$DEBUG="yes";
+
+# default environment stuff
+$home=$ENV{'HOME'};
+$DEFDIRS = "$home/News:$home/Mail";
+if (length($ENV{'NDIRS'}) == 0) { $ENV{'NDIRS'} = $DEFDIRS; }
+$DEFPAGER = "less";
+if (length($ENV{'PAGER'}) == 0) { $ENV{'PAGER'} = $DEFPAGER; }
+$PAGER = $ENV{'PAGER'};
+
+# main()
+    #
+    # Define scope of From && Subject lines (META support date ranges??)
+    #
+    &Getopts('f:s:');  # From, Subject
+
+    # Must have at least one author, subject or string
+    if (!$opt_f && !$opt_s) {
+        $norm_scope = shift || &Usage();
+    }
+    $from_scope = $opt_f;
+    $subj_scope = $opt_s; 
+
+    # Arbitrary number of possible search paths, probably way too big
+    @dbdirs = split(/:/, $ENV{'NDIRS'}, 999);
+
+    open (SHOWU, "|$PAGER");
+    print SHOWU "Looking for: \n";
+    $from_scope && print SHOWU "    From    lines matching $from_scope\n";
+    $subj_scope && print SHOWU "    Subject lines matching $subj_scope\n";
+    $norm_scope && print SHOWU "    Message lines matching $norm_scope\n";
+    print SHOWU "\nSearching....\n\n";
+    &flush(SHOWU);
+
+    # Number of matching messages
+    $match_count = 0;
+
+    foreach $dbdir (@dbdirs) {
+        opendir(DIR,$dbdir) || ((warn "Can't process $dbdir: $!\n"), next);
+        @files = sort grep(!/^\./, readdir(DIR));
+        closedir(DIR);
+        foreach $dbfile (@files) {
+            $infile = "$dbdir/$dbfile";
+        &get_the_message();
+        }
+    }
+    print SHOWU "Done Searching...Quit PAGER to continue\n";
+    if ($match_count < 1) { print SHOWU "\n\nNo matches found\n\n"; }
+    close (SHOWU);
+    
+    # Lovely user interface
+    while (1) {
+
+        # Grab ze response
+        print "Which Message:";
+        $worthy_input = 0;
+        $choice = (<STDIN>);    
+
+        for ($i = 1; $i <= $match_count; $i++) {
+            if ($choice == $i) {
+                $worthy_input = 1;
+                &activate_message($i);
+                open (SHOWU, "|$PAGER");
+                print SHOWU "MESSAGE $i\n\n";
+                &display_message(SHOWU);
+                close (SHOWU);
+            }
+        }
+
+        # Did I read garbage???
+        if ($worthy_input < 1) { print "Take it easy\n"; exit(0); }
+
+        open (SHOWU, "|$PAGER");
+        print SHOWU "Quit PAGER. Enter Message# or enter garbage to exit\n\n";
+        for ($i = 1; $i <= $match_count; $i++) {
+            &activate_message($i);
+            printf (SHOWU "$i - %-30.30s %-40.40s\n",$From_Line,$Date_Line);
+            printf (SHOWU "       %.70s\n",$Subj_Line);
+            printf (SHOWU "       in file %.60s\n\n",$Filename);
+        }
+        close (SHOWU);
+    }
+    
+# End Main
+
+
+sub get_the_message {
+    # Make sure it's a text file before searching for matches
+    if ( -T $infile ) {
+        open(INF,$infile) || ((warn "Can't process $infile: $!\n"), return());
+        &got_a_match();
+        close(INF);
+    }
+}
+
+
+sub got_a_match {
+#
+# The evals used here I think are necessary for the optional case
+# insensitivity -- would it be cheaper to have additional
+# conditionals instead?
+#
+    #
+    # Many times a file even starts with a header
+    #
+    $likely_header = 1;
+    $in_header     = 0;
+    $in_message    = 0;
+    $blank_line    = 1;
+    $real_top      = 0;
+    $tmp_top       = 0;
+    $bottom        = 1;
+
+    while($cur_line = <INF>) {
+        chop $cur_line;
+
+        $DEBUG && print SHOWU;
+"$likely_header.$in_header.$in_message.$blank_line.$tmp_top.$real_top.$bottom.$infile.",substr($cur_line,0,20),"\n";
+        if ($cur_line =~ /\S+/) {
+            if ($in_header < 1) {
+
+                if ($likely_header > 1) {
+                #
+                # We've already got one match, this could be a header
+                #
+                    $blank_line = 0;
+
+                    $key_word = &handle_head_line($cur_line);
+
+                    if ($key_word ne "0") { 
+
+                        ++$likely_header;
+
+                        if ($likely_header > 2) {
+                        #
+                        # assume this is a header and we're not
+                        # in a message -- not likely anymore, it's fact
+                        #
+                            # Pop off any header lines at tail of message
+                            while (pop(@this_message) =~ /\S+/) { ; }
+
+                            $likely_header = 0;
+                            $in_header = 1;
+                            $in_message = 0;
+                        }
+
+                    }
+                } elsif ($blank_line > 0 || $likely_header > 0) {
+                #
+                # had a blank line -- header??
+                #
+                    $blank_line = 0;
+                    $key_word = &handle_head_line($cur_line);
+
+                    if ($key_word ne "0") {
+                    #
+                    # got 1 match so far, save this line as top of
+                    # header. Bump likeliness to stage two and clear
+                    # out header holder
+                    #
+                        while ($temp_head[0] =~ /\S+/) {
+                            shift(@temp_head);
+                        }
+                        ++$likely_header;
+                        if ($likely_header == 1) {
+                            $tmp_top  = tell - length($cur_line) - 1;
+                            $bottom  = tell;
+                        }
+
+                    } else {
+                    #
+                    # Where are we? try message
+                    #
+                        #if ($likely_header < 1) { $in_message = 1; }
+                    }
+                } else {
+                    ++$in_message;
+                    $blank_line = 0;
+                }
+            } else {
+                ++$in_header;
+                $blank_line = 0;
+            }
+        } else {
+        #
+        # each blank line not following header is a harbinger of
+        # another header -- set likely header to stage 1 
+        #
+            if ($in_header > 0) {
+                $in_header = 0;
+
+                # Was previous message a keeper?
+                if (&this_matches() > 0) { &light_match(); }
+                undef @this_message;
+
+                # New message header
+                @this_message = @temp_head;
+                undef @temp_head;
+                # store a separator
+                push(@this_message,"MESSAGE STARTS HERE");
+                $in_message = 1;
+                $blank_line = 0;
+                $real_top = $tmp_top;
+            } else {
+                $blank_line = 1;
+            }
+        }
+
+        # any header stuff this might push will get undef'd
+        if ($in_message > 0 ) { push(@this_message,"$cur_line"); }
+
+        # Save for header
+        push(@temp_head,"$cur_line");
+        $DEBUG && print SHOWU;
+"$likely_header.$in_header.$in_message.$blank_line.$tmp_top.$real_top.$bottom.$infile.",substr($cur_line,0,20),"\n";
+
+    }
+    # Catch the last message of the file, if it's a keeper
+    $bottom = tell;
+    if (&this_matches() > 0) { &light_match(); }
+    undef @this_message;
+}
+
+
+sub handle_head_line {
+    local($head_line) = @_;
+    $ret_val = "0";
+
+    if      ($head_line =~ /^Crossposted-To:/) {
+        $ret_val = "c";
+    } elsif ($head_line =~ /^Date:/) {
+        $ret_val = "d";
+    } elsif ($head_line =~ /^From[: ]/) {
+        $ret_val = "f";
+    } elsif ($head_line =~ /^Message-ID:/) {
+        $ret_val = "m";
+    } elsif ($head_line =~ /^Received:/) {
+        $ret_val = "r";
+    } elsif ($head_line =~ /^Reply-To:/) {
+        $ret_val = "a";
+    } elsif ($head_line =~ /^Subject:/) {
+        $ret_val = "s";
+    } elsif ($head_line =~ /^To:/) {
+        $ret_val = "t";
+    } elsif ($head_line =~ /^X-Mailer:/) {
+        $ret_val = "x";
+    }
+    return ($ret_val);
+}
+
+
+sub this_matches {
+    # Assume we got a full match until we know we didn't
+    $met_my_match   = 1;
+    $now_in_message = 0;
+    $from_match     = 0;
+    $subj_match     = 0;
+    $norm_match     = 0;
+
+    for (@this_message) {
+        /^MESSAGE STARTS HERE$/ && ($now_in_message = 1);
+        $try_line = $_;
+
+        if ($now_in_message < 1) {
+            $m_type = &handle_head_line($try_line);
+            if ($m_type eq "s" && ($this_subj = $try_line)) {
+                if ($subj_scope && $try_line =~ /^Subject:.*$subj_scope/) {
+                    $subj_match = 1;
+                }
+            } elsif ($m_type eq "f" && ($this_from = $try_line)) {
+                $this_from =~ /^From[: ]*(\S*)/;
+                $this_from = $1;
+                if ($from_scope && $try_line =~ /^From[: ].*$from_scope/) {
+                    $from_match = 1;
+                }
+            } else { ($m_type eq "d") && ($this_date = $try_line); }
+        } elsif ($norm_scope && $try_line =~ /$norm_scope/) {
+            $norm_match = 1;
+        }
+        $DEBUG && print SHOWU;
+"MM.$now_in_message.$m_type.$from_scope.$from_match.$subj_scope.$subj_match.$norm_scope.$norm_match.$try_line\n";
+    }
+    
+    # Make sure we got every match we needed
+    if ($from_scope && $from_match < 1) { $met_my_match = 0; }
+    if ($subj_scope && $subj_match < 1) { $met_my_match = 0; }
+    if ($norm_scope && $norm_match < 1) { $met_my_match = 0; }
+    $DEBUG && print SHOWU "MM. $met_my_match - non-Zero if I met my match\n"; 
+    return ($met_my_match);
+}       
+
+        
+sub light_match {
+#
+# got a matching pattern -- must find limits of this messgage and load
+# the "pseudononymous" :)
+#
+    ++$match_count;
+
+    &activate_message($match_count);
+        $Filename       = $infile;
+        $Date_Line      = $this_date;
+        $From_Line      = $this_from;
+        $Subj_Line      = $this_subj;
+        $TOM            = $real_top;
+        $BOM            = $bottom;
+
+    printf (SHOWU "$match_count - %-30.30s %-40.40s\n",$From_Line,$Date_Line);
+    printf (SHOWU "       %.70s\n",$Subj_Line);
+    printf (SHOWU "       in file %.60s\n\n",$Filename);
+    &flush(SHOWU);
+}
+
+
+sub display_message {
+    open(MFILE,$Filename) || ((warn "Can't process $Filename: $!\n"),
+return());
+    seek(MFILE,$TOM,0);
+    while(<MFILE>) {
+        last if (tell(MFILE) > $BOM);
+        push(@mess_ary,$_);
+    }
+    close(MFILE);
+
+    # Pop off any header lines at tail of message
+    while (pop(@mess_ary) =~ /\S+/) { ; }
+
+    # Display to the PAGER pipe
+    for (@mess_ary) { print SHOWU "$_"; }
+
+    undef @mess_ary;
+}
+
+sub gensym { 'gensym_' . ++$gensym'symbol; } 
+
+sub activate_message {
+#
+# This was smilingly stolen from tchrist -- faq
+#
+    local($message) = @_;
+
+    &assert('$message',$message);
+
+    $Last_Seq = $Current_Seq;
+
+    if (! defined $Active_Messages{$message}) {
+        $Active_Messages{$message} = &gensym;
+        push(@Active_Messages, $message);
+    }
+
+    local($package) = $Active_Messages{$message};
+
+    local($code)=<<"EOF";
+    {
+        package $package;
+        *'Message_ID        = *Message_ID;
+        *'Filename          = *Filename;
+        *'Date_Line         = *Date_Line;
+        *'From_Line         = *From_Line;
+        *'Subj_Line         = *Subj_Line;
+        *'TOM               = *TOM;
+        *'BOM               = *BOM;
+        }
+EOF
+    eval $code;
+    $Current_Seq = $message;
+
+    &panic("bad eval: $@\n$code\n") if $@;
+} 
