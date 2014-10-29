@@ -1,42 +1,4 @@
-#!/usr/local/bin/perl
-#
-# newser -- a News and Mail query browser. Joe Morris jolomo@netcom.com
-#
-# $Id: newser,v 1.16 1993/12/02 20:20:10 joe Exp $
-#
-# SYNTAX
-sub Usage {
-    print "Usage: $0 [-f from_string] [-s subject_string] [search_string]\n";
-    print "       Wrap double quotes around regex strings\n";
-    exit(1);
-}
-#
-# DESCRIPTION
-#    The raw materials for this program are files where you've appended all
-#    your online goodies. All those articles that you thought were worth
-#    saving but now are taking 100MB of disk space and all you can do
-#    is grep around in them. BLAH :(
-#       NEWSER treats each of these files as a series of discreet messages,
-#    you will be much better off if you just appended these things one after
-#    the other, never editing the area which really defines a message ---
-#    The Header. (Formal description of a "message" is in Notes section).
-#    The USENET digests I've tried have worked fine.
-#       With NEWSER, you can search on specific subjects, authors (From lines),
-#    and things within the body of the message. A search for the word "From"
-#    in the body will not match the "From"'s in headers, searches for
-#    a specific subject will only match Subject lines in the header.
-#       This program was prompted by a recent discussion on
-#    alt.folklore.computers where it seemed that this sort of thing is
-#    not readily available today -- so here's my 300 lines worth.
-#
-#    This is alpha, it's been run successfully on Linux(4MB ram :), SUN and AIX.
-#
-# ENVIRONMENT
-#    NDIRS (news-dirs) a PATH-like variable to searched for your accumulated
-#       articles and e-mail. Defaults to "$HOME/News:$HOME/Mail".
-#    PAGER if unset or empty, defaults to "less".
-ubik:mac jolomo$ cat ~/src/newser/newser-1.6/newser.pl
-#!/usr/local/bin/perl
+#!/usr/bin/perl
 #
 # newser -- a News and Mail query browser. Joe Morris jolomo@netcom.com
 #
